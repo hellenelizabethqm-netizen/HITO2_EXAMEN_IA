@@ -1,0 +1,2336 @@
+{
+  "name": "Monitoreo inteligente de EPP",
+  "nodes": [
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "\nsalidas = []\n\nfor indice, elemento in enumerate(_items):\n    datos = elemento.get(\"json\", {})\n\n    # 1. Recuperar los datos del formulario\n    zona = datos.get(\"Zona de trabajo\")\n    supervisor = datos.get(\"Identificador del supervisor\")\n\n    # 2. Validar la zona y el supervisor\n    if zona not in [\"zona_1\", \"zona_2\"]:\n        raise ValueError(\"Zona de trabajo no válida.\")\n\n    if not str(supervisor or \"\").strip():\n        raise ValueError(\"Falta el identificador del supervisor.\")\n\n    # 3. Comprobar que se recibió una sola imagen\n    binarios = elemento.get(\"binary\") or {}\n\n    if len(binarios) != 1:\n        raise ValueError(\"Debe recibirse exactamente una imagen.\")\n\n    clave_imagen = next(iter(binarios))\n    imagen = binarios[clave_imagen]\n\n    # 4. Validar el formato de imagen\n    formatos_permitidos = [\n        \"image/jpeg\",\n        \"image/png\",\n        \"image/webp\"\n    ]\n\n    if imagen.get(\"mimeType\") not in formatos_permitidos:\n        raise ValueError(\"Formato de imagen no permitido.\")\n\n    # 5. Revisar el tamaño máximo de 5 MB\n    archivo_formulario = datos.get(\"Fotografía de la zona\")\n    tamano = None\n\n    if isinstance(archivo_formulario, list) and archivo_formulario:\n        primero = archivo_formulario[0]\n\n        if isinstance(primero, dict):\n            tamano = primero.get(\"size\")\n\n    if isinstance(tamano, (int, float)) and tamano > 5 * 1024 * 1024:\n        raise ValueError(\"La imagen supera los 5 MB.\")\n\n    # 6. Preparar la salida para YOLO\n    salidas.append({\n        \"json\": {\n            \"zona_id\": zona,\n            \"supervisor\": str(supervisor).strip(),\n            \"imagen_nombre\": imagen.get(\"fileName\"),\n            \"imagen_tipo\": imagen.get(\"mimeType\"),\n            \"imagen_bytes\": tamano,\n            \"fecha_envio\": datos.get(\"submittedAt\"),\n            \"estado\": \"entrada_validada\"\n        },\n\n        # Mantener la imagen para el nodo HTTP\n        \"binary\": {\n            \"imagen\": imagen\n        },\n\n        \"pairedItem\": {\n            \"item\": indice\n        }\n    })\n\nreturn salidas\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        32,
+        -96
+      ],
+      "id": "740fa5b9-3778-4817-81e7-325bd21921d9",
+      "name": "Validar entrada EPP"
+    },
+    {
+      "parameters": {
+        "formTitle": "Sistema de monitoreo inteligente de EPP",
+        "formDescription": "Ingrese una fotografía de la zona de trabajo, seleccione la zona correspondiente y el supervisor responsable. El sistema analizará la imagen para identificar trabajadores y elementos de protección personal según los requisitos de cada zona. Zona_1: casco y chaleco de seguridad. Zona_2: calzado, guantes y lentes de protección. Los elementos no confirmados por el sistema requieren revisión humana. El análisis no constituye una certificación de cumplimiento.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Fotografía de la zona",
+              "fieldType": "file",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Zona de trabajo",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "zona_1"
+                  },
+                  {
+                    "option": "zona_2"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Identificador del supervisor",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Catalina Cornejo"
+                  },
+                  {
+                    "option": "Hellen Quiñones"
+                  },
+                  {
+                    "option": "Gustavo Sánchez"
+                  }
+                ]
+              },
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        -128,
+        -96
+      ],
+      "id": "54f0ba1d-23a6-49e5-b933-6d0afbf14cfd",
+      "name": "Formulario",
+      "webhookId": "3677d634-7389-4759-8c49-c071a9eb33fd"
+    },
+    {
+      "parameters": {
+        "method": "=POST",
+        "url": "https://supervision-epp-hito2.onrender.com/analizar",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "imagen",
+              "inputDataFieldName": "imagen"
+            },
+            {
+              "name": "zona_id",
+              "value": "={{ $json.zona_id }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        -96
+      ],
+      "id": "b07032f1-63d4-4d09-9e2d-be95b1ad67e3",
+      "name": "Detectar EPP con YOLO (HTTP)",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "maxTries": 5,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Jrk07DP3Dpcks4ro",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-3.1-flash-lite",
+          "mode": "list",
+          "cachedResultName": "Gemini 3.1 Flash Lite",
+          "cachedResultUrl": ""
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=\n{{\n  $json.prompt_gemini\n  + \"\\n\\nCONTEXTO DOCUMENTAL RAG:\\n\"\n  + $json.contexto_para_llm\n  + \"\\n\\nINSTRUCCIONES ADICIONALES:\"\n  + \"\\n- Usa únicamente los procedimientos pertinentes a esta inspección.\"\n  + \"\\n- Cita sus IDs SIM-PROC en la justificación cuando los utilices.\"\n  + \"\\n- Si un procedimiento no corresponde a los resultados de YOLO, ignóralo.\"\n  + \"\\n- Los procedimientos son simulados y no validados profesionalmente.\"\n  + \"\\n- No inventes incumplimientos ni confirmes ausencia de EPP.\"\n  + \"\\n- Mantén el formato JSON original con diagnostico, recomendacion, prioridad y justificacion.\"\n}}\n"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "builtInTools": {},
+        "options": {
+          "maxOutputTokens": 350,
+          "candidateCount": 1,
+          "temperature": 0.1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        1104,
+        -208
+      ],
+      "id": "aeb789b8-7698-4412-bb89-50a3d619e385",
+      "name": "Generar informe EPP con Gemini",
+      "credentials": {
+        "googlePalmApi": {
+          "id": null,
+          "name": "",
+          "__aiGatewayManaged": true
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "\n# Validar el informe de Gemini y preparar la salida final\n\nsalidas = []\n\nfor indice, elemento in enumerate(_items):\n\n    datos = elemento.get(\"json\", {})\n    informe = datos.get(\"informe\")\n    anterior = datos.get(\"anterior\")\n\n    # 1. Comprobar que llegaron los datos necesarios\n    if not isinstance(informe, dict):\n        raise ValueError(\n            \"Gemini no devolvió un objeto JSON válido.\"\n        )\n\n    if not isinstance(anterior, dict):\n        raise ValueError(\n            \"No se recuperaron los datos de la inspección.\"\n        )\n\n    # 2. Validar los cuatro campos obligatorios de Gemini\n    campos = [\n        \"diagnostico\",\n        \"recomendacion\",\n        \"prioridad\",\n        \"justificacion\"\n    ]\n\n    for campo in campos:\n        valor = informe.get(campo)\n\n        if not isinstance(valor, str) or not valor.strip():\n            raise ValueError(\n                \"Campo obligatorio inválido: \" + campo\n            )\n\n        informe[campo] = valor.strip()\n\n    # 3. Comprobar la prioridad\n    informe[\"prioridad\"] = informe[\"prioridad\"].lower()\n\n    if informe[\"prioridad\"] not in [\"alta\", \"media\", \"baja\"]:\n        raise ValueError(\"Prioridad inválida.\")\n\n    # 4. Recuperar los resultados originales de YOLO\n    yolo = anterior.get(\"resultado_yolo\")\n\n    if not isinstance(yolo, dict):\n        raise ValueError(\n            \"Faltan los resultados originales de YOLO.\"\n        )\n\n    # 5. Validar la zona\n    zona_id = yolo.get(\"zona_id\")\n\n    if zona_id not in [\"zona_1\", \"zona_2\"]:\n        raise ValueError(\"Zona de trabajo inválida.\")\n\n    # 6. Validar los trabajadores y los EPP requeridos\n    trabajadores = yolo.get(\"trabajadores\")\n    epp_requeridos = yolo.get(\"epp_requeridos\")\n\n    if not isinstance(trabajadores, list):\n        raise ValueError(\n            \"Falta el detalle de trabajadores.\"\n        )\n\n    if not isinstance(epp_requeridos, list):\n        raise ValueError(\n            \"Faltan los EPP requeridos de la zona.\"\n        )\n\n    cantidad_trabajadores = yolo.get(\n        \"cantidad_trabajadores\"\n    )\n\n    if not isinstance(cantidad_trabajadores, int):\n        raise ValueError(\n            \"Cantidad de trabajadores inválida.\"\n        )\n\n    # 7. Validar los indicadores de revisión\n    resumen = yolo.get(\"resumen\")\n\n    if not isinstance(resumen, dict):\n        raise ValueError(\n            \"Falta el resumen de YOLO.\"\n        )\n\n    requieren_revision = resumen.get(\"requieren_revision\")\n\n    if not isinstance(requieren_revision, int):\n        raise ValueError(\n            \"Indicador de revisión inválido.\"\n        )\n\n    if requieren_revision < 0:\n        raise ValueError(\n            \"El indicador de revisión no puede ser negativo.\"\n        )\n\n    if requieren_revision > cantidad_trabajadores:\n        raise ValueError(\n            \"Los trabajadores en revisión superan el total.\"\n        )\n\n    # 8. Consolidar la inspección\n    salidas.append({\n        \"json\": {\n            \"inspeccion_id\": yolo.get(\"inspeccion_id\"),\n            \"fecha_inspeccion\": anterior.get(\"fecha_envio\"),\n            \"fecha_procesamiento\": datos.get(\n                \"fecha_procesamiento\"\n            ),\n\n            \"supervisor\": anterior.get(\"supervisor\"),\n            \"imagen_nombre\": anterior.get(\"imagen_nombre\"),\n\n            \"zona_id\": zona_id,\n            \"zona\": yolo.get(\"zona\"),\n            \"reglas_validadas\": yolo.get(\"reglas_validadas\"),\n\n            \"modelo_vision\": yolo.get(\"modelo\"),\n            \"modelo_llm\": \"gemini-3.1-flash-lite\",\n\n            \"epp_requeridos\": epp_requeridos,\n            \"cantidad_trabajadores\": cantidad_trabajadores,\n            \"personas_baja_confianza\": yolo.get(\n                \"personas_baja_confianza\"\n            ),\n\n            \"trabajadores\": trabajadores,\n            \"trabajadores_revision\": requieren_revision,\n            \"indicadores\": yolo.get(\"indicadores\"),\n            \"estado_inspeccion\": yolo.get(\n                \"estado_inspeccion\"\n            ),\n\n            \"informe_llm\": {\n                \"diagnostico\": informe[\"diagnostico\"],\n                \"recomendacion\": informe[\"recomendacion\"],\n                \"prioridad\": informe[\"prioridad\"],\n                \"justificacion\": informe[\"justificacion\"]\n            },\n\n            \"revision_humana\": {\n                \"requerida\": True,\n                \"estado\": \"pendiente\"\n            },\n\n            \"advertencia\": yolo.get(\"advertencia\"),\n            \"estado_flujo\": \"informe_generado\"\n        },\n\n        \"pairedItem\": {\n            \"item\": indice\n        }\n    })\n\nreturn salidas\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1616,
+        -464
+      ],
+      "id": "bb17902d-8857-41b0-9bd6-a161cc3df8a0",
+      "name": "Validar informe final EPP",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "\n# Preparar los resultados de YOLO para Gemini\n\nsalidas = []\n\n# Convertir datos de Python a texto JSON\ndef convertir_json(valor):\n    if valor is None:\n        return \"null\"\n\n    if isinstance(valor, bool):\n        return \"true\" if valor else \"false\"\n\n    if isinstance(valor, str):\n        caracteres = []\n\n        for caracter in valor:\n            if caracter == '\"':\n                caracteres.append('\\\\\"')\n            elif caracter == \"\\\\\":\n                caracteres.append(\"\\\\\\\\\")\n            elif ord(caracter) < 32:\n                caracteres.append(\"\\\\u%04x\" % ord(caracter))\n            else:\n                caracteres.append(caracter)\n\n        return '\"' + \"\".join(caracteres) + '\"'\n\n    if isinstance(valor, (int, float)):\n        return str(valor)\n\n    if isinstance(valor, list):\n        return \"[\" + \",\".join(\n            convertir_json(v) for v in valor\n        ) + \"]\"\n\n    if isinstance(valor, dict):\n        return \"{\" + \",\".join(\n            convertir_json(str(k)) + \":\" + convertir_json(v)\n            for k, v in valor.items()\n        ) + \"}\"\n\n    return convertir_json(str(valor))\n\n\nfor indice, elemento in enumerate(_items):\n\n    datos = elemento.get(\"json\", {})\n\n    # 1. Recuperar información del formulario\n    supervisor = datos.get(\"supervisor\")\n    imagen_nombre = datos.get(\"imagen_nombre\")\n    fecha_envio = datos.get(\"fecha_envio\")\n\n    if not supervisor or not imagen_nombre or not fecha_envio:\n        raise ValueError(\"Faltan datos del formulario.\")\n\n    # 2. Separar los resultados originales de YOLO\n    yolo = {\n        clave: valor\n        for clave, valor in datos.items()\n        if clave not in [\n            \"supervisor\",\n            \"imagen_nombre\",\n            \"fecha_envio\"\n        ]\n    }\n\n    # 3. Validar la respuesta de YOLO\n    zona_id = yolo.get(\"zona_id\")\n    requeridos = yolo.get(\"epp_requeridos\")\n    trabajadores_yolo = yolo.get(\"trabajadores\")\n    resumen = yolo.get(\"resumen\")\n\n    if zona_id not in [\"zona_1\", \"zona_2\"]:\n        raise ValueError(\"La zona devuelta por YOLO no es válida.\")\n\n    if not isinstance(requeridos, list):\n        raise ValueError(\"Faltan los EPP requeridos.\")\n\n    if not isinstance(trabajadores_yolo, list):\n        raise ValueError(\"Falta el detalle de trabajadores.\")\n\n    if not isinstance(resumen, dict):\n        raise ValueError(\"Falta el resumen de YOLO.\")\n\n    # 4. Resumir los EPP por trabajador\n    trabajadores = []\n\n    for t in trabajadores_yolo:\n\n        detectados = t.get(\"epp_detectados\") or {}\n        no_confirmados = t.get(\"epp_no_confirmados\") or []\n\n        # Considerar solo los EPP exigidos en esta zona\n        confirmados_zona = [\n            epp for epp in requeridos\n            if epp in detectados\n        ]\n\n        no_confirmados_zona = [\n            epp for epp in requeridos\n            if epp in no_confirmados\n        ]\n\n        trabajadores.append({\n            \"id\": t.get(\"persona_id\"),\n            \"epp_confirmados\": confirmados_zona,\n            \"epp_no_confirmados\": no_confirmados_zona\n        })\n\n    # 5. Recuperar indicadores calculados por YOLO\n    cantidad = yolo.get(\"cantidad_trabajadores\")\n    requieren_revision = resumen.get(\"requieren_revision\")\n\n    if not isinstance(cantidad, int):\n        raise ValueError(\"Cantidad de trabajadores inválida.\")\n\n    if not isinstance(requieren_revision, int):\n        raise ValueError(\"Indicador de revisión inválido.\")\n\n    # 6. Preparar los datos para Gemini\n    entrada_llm = {\n        \"inspeccion_id\": yolo.get(\"inspeccion_id\"),\n        \"zona_id\": zona_id,\n        \"zona\": yolo.get(\"zona\"),\n        \"reglas_academicas\": not yolo.get(\"reglas_validadas\"),\n        \"epp_requeridos\": requeridos,\n        \"trabajadores_detectados\": cantidad,\n        \"trabajadores_revision_potencial\": requieren_revision,\n        \"personas_baja_confianza\": yolo.get(\n            \"personas_baja_confianza\"\n        ),\n        \"trabajadores\": trabajadores,\n        \"revision_humana_requerida\": yolo.get(\n            \"revision_humana_requerida\"\n        )\n    }\n\n    # 7. Instrucciones para Gemini\n    instrucciones = \"\"\"\nEres un asistente de prevención de riesgos.\n\nInterpreta exclusivamente los resultados proporcionados.\n\nReglas:\n- No afirmes que un EPP está ausente si no fue detectado.\n- No declares incumplimientos confirmados.\n- Las reglas de cada zona son académicas.\n- - No afirmes que los trabajadores cumplen con la normativa o usan correctamente los EPP. Describe únicamente lo detectado por YOLO y aclara que la evaluación requiere revisión humana.\n- No inventes leyes, riesgos ni hechos observados.\n- Evalúa solamente los EPP requeridos en la zona.\n- Un EPP no confirmado requiere revisión humana.\n- La prioridad indica urgencia de revisión, no infracción.\n- Si no se detectan trabajadores, indica que la\n  inspección no permitió evaluar personas.\n- En ese caso, recomienda revisar la fotografía\n  y repetir la captura si corresponde.\n- Solo recomienda revisión rutinaria cuando\n  se detectaron trabajadores y todos sus EPP\n  requeridos fueron confirmados visualmente.\n- Nunca declares cumplimiento definitivo.\n- La decisión final siempre corresponde al supervisor.\n- Máximo 80 palabras en total.\n- Describe los EPP como \"detectados y asociados por YOLO\",\n  no como cumplimiento confirmado.\n- No afirmes que los trabajadores utilizan correctamente\n  sus EPP ni que la inspección está aprobada.\n\n\nResponde SOLO con un objeto JSON válido que contenga:\n\"diagnostico\": texto breve,\n\"recomendacion\": acción concreta,\n\"prioridad\": \"alta\", \"media\" o \"baja\",\n\"justificacion\": razón breve.\n\"\"\"\n\n    # 8. Unir las instrucciones con los datos\n    prompt_gemini = (\n        instrucciones\n        + \"\\nDATOS DE LA INSPECCIÓN:\\n\"\n        + convertir_json(entrada_llm)\n    )\n\n    # 9. Conservar los datos para los siguientes nodos\n    salidas.append({\n        \"json\": {\n            \"supervisor\": supervisor,\n            \"imagen_nombre\": imagen_nombre,\n            \"fecha_envio\": fecha_envio,\n            \"resultado_yolo\": yolo,\n            \"entrada_llm\": entrada_llm,\n            \"prompt_gemini\": prompt_gemini,\n            \"estado_flujo\": \"pendiente_gemini\"\n        },\n\n        \"pairedItem\": {\n            \"item\": indice\n        }\n    })\n\nreturn salidas\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        -192
+      ],
+      "id": "669b7d91-4cf6-4eb5-b1f1-6e3cd7fc138f",
+      "name": "Preparar informe Gemini"
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "sendTo": "={{ ({\n  \"Catalina Cornejo\": \"ccornejod@udd.cl\",\n  \"Hellen Quiñones\": \"hquinonesm@udd.cl\",\n  \"Gustavo Sánchez\": \"gsanchezy@udd.cl\"\n})[$json.supervisor] }}",
+        "subject": "=\n{{ $json.trabajadores_revision > 0\n  ? `ALERTA EPP [${$json.informe_llm.prioridad.toUpperCase()}] - ${$json.zona}`\n  : `Informe EPP [REVISIÓN RUTINARIA] - ${$json.zona}`\n}}\n",
+        "message": "=\n{{ (() => {\n  const d = $json;\n  const i = d.informe_llm;\n  const trabajadores = d.trabajadores || [];\n  const requeridos = d.epp_requeridos || [];\n\n  // Enlace al tablero interactivo\n  const urlTablero = \"https://sistema-de-monitoreo-inteligente-de-epp-cdqurejjtr53gqpfj49m8v.streamlit.app/\";\n\n  // Evitar caracteres que puedan alterar el HTML\n  const seguro = (valor) =>\n    String(valor ?? \"\")\n      .replace(/&/g, \"&amp;\")\n      .replace(/</g, \"&lt;\")\n      .replace(/>/g, \"&gt;\")\n      .replace(/\"/g, \"&quot;\")\n      .replace(/'/g, \"&#39;\");\n\n  // Traducir los nombres de los EPP\n  const nombres = {\n    \"helmet\": \"Casco\",\n    \"safety-vest\": \"Chaleco de seguridad\",\n    \"shoes\": \"Calzado de seguridad\",\n    \"gloves\": \"Guantes\",\n    \"glasses\": \"Lentes de seguridad\",\n    \"safety-glasses\": \"Lentes de seguridad\",\n    \"goggles\": \"Lentes de seguridad\"\n  };\n\n  // Resumir únicamente los EPP requeridos en la zona\n  const filasEpp = requeridos.map(epp => {\n    const detectados = trabajadores.filter(t =>\n      Object.keys(t.epp_detectados || {}).includes(epp)\n    ).length;\n\n    const noConfirmados = trabajadores.filter(t =>\n      (t.epp_no_confirmados || []).includes(epp)\n    ).length;\n\n    return `\n      <tr>\n        <td style=\"padding:11px;border-bottom:1px solid #e2e8f0;\">\n          ${seguro(nombres[epp] || epp)}\n        </td>\n        <td style=\"padding:11px;text-align:center;border-bottom:1px solid #e2e8f0;\">\n          ${detectados}\n        </td>\n        <td style=\"padding:11px;text-align:center;border-bottom:1px solid #e2e8f0;\">\n          ${noConfirmados}\n        </td>\n      </tr>\n    `;\n  }).join(\"\");\n\n  const hayAlertas = d.trabajadores_revision > 0;\n\n  const estado = hayAlertas\n    ? \"REVISIÓN PRIORITARIA PENDIENTE\"\n    : \"REVISIÓN RUTINARIA PENDIENTE\";\n\n  const colorEstado = hayAlertas ? \"#b45309\" : \"#2563eb\";\n\n  const fecha = new Date(d.fecha_inspeccion)\n    .toLocaleString(\"es-CL\", {\n      timeZone: \"America/Santiago\",\n      dateStyle: \"short\",\n      timeStyle: \"short\"\n    });\n\n  return `\n  <div style=\"font-family:Arial,Helvetica,sans-serif;\n              background:#f4f6f8;padding:24px;color:#253044;\">\n\n    <div style=\"max-width:680px;margin:auto;background:white;\n                border:1px solid #e2e8f0;border-radius:12px;\n                overflow:hidden;\">\n\n      <div style=\"background:#17324f;color:white;padding:28px;\">\n        <h1 style=\"font-size:24px;margin:0;\">\n          Informe de inspección EPP\n        </h1>\n        <p style=\"font-size:13px;color:#d5e3ef;\">\n          Sistema automatizado de monitoreo de seguridad\n        </p>\n      </div>\n\n      <div style=\"padding:28px;\">\n\n        <h2 style=\"font-size:17px;color:#17324f;\">\n          Resumen de la inspección\n        </h2>\n\n        <table style=\"width:100%;border-collapse:collapse;\n                      background:#f8fafc;margin-bottom:24px;\">\n          <tr>\n            <td style=\"padding:14px;text-align:center;\">\n              <div style=\"font-size:12px;color:#64748b;\">\n                Trabajadores detectados\n              </div>\n              <div style=\"font-size:28px;font-weight:bold;\">\n                ${seguro(d.cantidad_trabajadores)}\n              </div>\n            </td>\n            <td style=\"padding:14px;text-align:center;\">\n              <div style=\"font-size:12px;color:#64748b;\">\n                Revisión potencial\n              </div>\n              <div style=\"font-size:28px;font-weight:bold;color:#b45309;\">\n                ${seguro(d.trabajadores_revision)}\n              </div>\n            </td>\n          </tr>\n        </table>\n\n        <p style=\"font-size:14px;line-height:1.9;\">\n          <b>Zona:</b> ${seguro(d.zona)}<br>\n          <b>Fecha:</b> ${seguro(fecha)}<br>\n          <b>Supervisor:</b> ${seguro(d.supervisor)}<br>\n          <b>Imagen:</b> ${seguro(d.imagen_nombre)}<br>\n          <b>ID de inspección:</b> ${seguro(d.inspeccion_id)}<br>\n          <b>Prioridad:</b> ${seguro(i.prioridad).toUpperCase()}\n        </p>\n\n        <h2 style=\"font-size:17px;color:#17324f;\">\n          Elementos de protección evaluados\n        </h2>\n\n        <table style=\"width:100%;border-collapse:collapse;\n                      font-size:13px;margin-bottom:24px;\">\n          <tr style=\"background:#edf2f7;color:#17324f;\">\n            <th style=\"padding:11px;text-align:left;\">EPP</th>\n            <th style=\"padding:11px;\">Detectado</th>\n            <th style=\"padding:11px;\">No confirmado</th>\n          </tr>\n          ${filasEpp}\n        </table>\n\n        <p style=\"font-size:12px;color:#64748b;\">\n          Los valores corresponden a trabajadores con detecciones\n          asociadas por el modelo, no a una certificación de cumplimiento.\n        </p>\n\n        <h2 style=\"font-size:17px;color:#17324f;\">\n          Diagnóstico\n        </h2>\n        <p style=\"font-size:14px;line-height:1.7;\">\n          ${seguro(i.diagnostico)}\n        </p>\n\n        <h2 style=\"font-size:17px;color:#17324f;\">\n          Recomendación\n        </h2>\n        <p style=\"font-size:14px;line-height:1.7;\">\n          ${seguro(i.recomendacion)}\n        </p>\n\n        <h2 style=\"font-size:17px;color:#17324f;\">\n          Justificación\n        </h2>\n        <p style=\"font-size:14px;line-height:1.7;\">\n          ${seguro(i.justificacion)}\n        </p>\n\n        <!-- ACCESO AL TABLERO INTERACTIVO -->\n        <div style=\"background:#edf5fa;border:1px solid #d6e5f0;\n                    border-radius:10px;padding:22px;\n                    text-align:center;margin:26px 0;\">\n\n          <h2 style=\"font-size:17px;color:#17324f;margin:0 0 10px;\">\n            Centro de control de EPP\n          </h2>\n\n          <p style=\"font-size:13px;color:#475569;line-height:1.7;\n                    margin:0 0 20px;\">\n            Consulte los indicadores de supervisión, el historial\n            de inspecciones, los pronósticos de los modelos\n            y las recomendaciones de Gemini.\n          </p>\n\n          <a href=\"${urlTablero}\"\n             target=\"_blank\"\n             style=\"display:inline-block;background:#17628b;\n                    color:#ffffff;text-decoration:none;\n                    padding:14px 24px;border-radius:7px;\n                    font-size:14px;font-weight:bold;\">\n            📊 Ver tablero interactivo EPP\n          </a>\n\n          <p style=\"font-size:11px;color:#64748b;\n                    margin:17px 0 0;\">\n            Los indicadores se actualizan desde Google Sheets.\n            Los pronósticos y clasificaciones corresponden\n            a resultados académicos previamente calculados.\n          </p>\n\n        </div>\n\n        <div style=\"background:#f8fafc;border-left:4px solid ${colorEstado};\n                    padding:16px;margin-top:24px;\">\n          <b style=\"font-size:13px;color:${colorEstado};\">\n            ${estado}\n          </b>\n          <p style=\"font-size:12px;line-height:1.7;color:#475569;\">\n            ${seguro(d.advertencia)}\n          </p>\n        </div>\n\n      </div>\n\n      <div style=\"background:#f4f6f8;padding:18px;text-align:center;\">\n        <p style=\"font-size:12px;color:#64748b;line-height:1.7;\">\n          Informe generado mediante YOLOv8n, Python y Gemini.\n          Documento de apoyo académico.\n          No constituye una certificación de cumplimiento.\n        </p>\n      </div>\n\n    </div>\n  </div>\n  `;\n})() }}\n",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double",
+            "approveLabel": "✅ Revisión realizada",
+            "disapproveLabel": "⚠️ Requiere seguimiento"
+          }
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1984,
+        -224
+      ],
+      "id": "eeb3189c-25ee-4146-bc62-6c624e99ff68",
+      "name": "Enviar alerta EPP Gmail",
+      "webhookId": "dd74ce3a-886e-4bcc-9133-0f8817f8016e",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "N5rfvVN7mbnh77VK",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "1560634413",
+        "text": "=\n{{ (() => {\n  const d = $json;\n  const i = d.informe_llm;\n  const trabajadores = d.trabajadores || [];\n  const requeridos = d.epp_requeridos || [];\n\n  // Enlace al tablero interactivo\n  const urlTablero = \"https://sistema-de-monitoreo-inteligente-de-epp-cdqurejjtr53gqpfj49m8v.streamlit.app/\";\n\n  const seguro = (valor) =>\n    String(valor ?? \"\")\n      .replace(/&/g, \"&amp;\")\n      .replace(/</g, \"&lt;\")\n      .replace(/>/g, \"&gt;\");\n\n  const nombres = {\n    \"helmet\": \"⛑️ Cascos\",\n    \"safety-vest\": \"🦺 Chalecos\",\n    \"shoes\": \"🥾 Calzado\",\n    \"gloves\": \"🧤 Guantes\",\n    \"glasses\": \"🥽 Lentes\",\n    \"safety-glasses\": \"🥽 Lentes\",\n    \"goggles\": \"🥽 Lentes\"\n  };\n\n  const detalle = requeridos.map(epp => {\n    const pendientes = trabajadores.filter(t =>\n      (t.epp_no_confirmados || []).includes(epp)\n    ).length;\n\n    return `${nombres[epp] || seguro(epp)} no confirmados: <b>${pendientes}</b>`;\n  }).join(\"\\n\");\n\n  const hayAlertas = d.trabajadores_revision > 0;\n\n  const titulo = hayAlertas\n    ? \"🚨 ALERTA DE INSPECCIÓN EPP\"\n    : \"📋 INFORME DE INSPECCIÓN EPP\";\n\n  const fecha = new Date(d.fecha_inspeccion)\n    .toLocaleString(\"es-CL\", {\n      timeZone: \"America/Santiago\",\n      dateStyle: \"short\",\n      timeStyle: \"short\"\n    });\n\n  return `<b>${titulo}</b>\n\n📍 <b>Zona:</b> ${seguro(d.zona)}\n📅 <b>Fecha:</b> ${seguro(fecha)}\n👤 <b>Supervisor:</b> ${seguro(d.supervisor)}\n\n<b>RESUMEN</b>\n👷 Trabajadores detectados: <b>${d.cantidad_trabajadores}</b>\n⚠️ Revisión potencial: <b>${d.trabajadores_revision}</b>\n\n<b>EPP EVALUADOS</b>\n${detalle}\n\n<b>Prioridad:</b> ${seguro(i.prioridad).toUpperCase()}\n\n<b>DIAGNÓSTICO</b>\n${seguro(i.diagnostico)}\n\n<b>RECOMENDACIÓN</b>\n${seguro(i.recomendacion)}\n\n<b>ESTADO</b>\nRevisión humana pendiente.\n\n<i>Los EPP no confirmados no implican necesariamente ausencia o incumplimiento. La decisión final corresponde al supervisor.</i>\n\n━━━━━━━━━━━━━━━━\n\n📊 <b>TABLERO INTERACTIVO EPP</b>\n\nConsulta los indicadores de supervisión, resultados de los modelos, historial de inspecciones y recomendaciones de Gemini.\n\n<a href=\"${urlTablero}\">📊 Abrir centro de control EPP</a>\n\n<i>Las inspecciones se consultan desde Google Sheets. Los pronósticos y clasificaciones corresponden a resultados académicos previamente calculados.</i>`;\n})() }}\n",
+        "replyMarkup": "=none",
+        "forceReply": {},
+        "replyKeyboardOptions": {},
+        "replyKeyboardRemove": {},
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1952,
+        -672
+      ],
+      "id": "bcd2d216-321e-4938-bc38-39039d76d807",
+      "name": "Enviar alerta EPP Telegram",
+      "webhookId": "f59d4658-7187-41d6-b733-2741a53d2496",
+      "credentials": {
+        "telegramApi": {
+          "id": "yJ6eO6C2XgY8vD9L",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE",
+          "mode": "list",
+          "cachedResultName": "Historial de Inspecciones EPP - Certamen 2",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Inspecciones",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "id_inspeccion": "={{ $json.inspeccion_id }}",
+            "fecha_inspeccion": "={{ $json.fecha_inspeccion }}",
+            "supervisor": "={{ $json.supervisor }}",
+            "imagen": "={{ $json.imagen_nombre }}",
+            "trabajadores_detectados": "={{ $json.cantidad_trabajadores }}",
+            "requieren_revision": "={{ $json.trabajadores_revision }}",
+            "cascos_no_confirmados": "={{ $json.epp_requeridos.includes('helmet') ? $json.trabajadores.filter(t => (t.epp_no_confirmados || []).includes('helmet')).length : '' }}",
+            "chalecos_no_confirmados": "={{ $json.epp_requeridos.includes('safety-vest') ? $json.trabajadores.filter(t => (t.epp_no_confirmados || []).includes('safety-vest')).length : '' }}",
+            "prioridad": "={{ $json.informe_llm.prioridad }}",
+            "diagnostico": "={{ $json.informe_llm.diagnostico }}",
+            "justificacion": "={{ $json.informe_llm.justificacion }}",
+            "recomendacion": "={{ $json.informe_llm.recomendacion }}",
+            "estado_revision": "={{ $json.revision_humana.estado }}",
+            "detalle_trabajadores": "={{ JSON.stringify($json.trabajadores) }}",
+            "reglas_validadas": "={{ $json.reglas_validadas }}",
+            "zona_id": "={{ $json.zona_id }}",
+            "epp_requeridos": "={{ $json.epp_requeridos.join(', ') }}",
+            "guantes_no_confirmados": "={{ $json.epp_requeridos.includes('gloves') ? $json.trabajadores.filter(t => (t.epp_no_confirmados || []).includes('gloves')).length : '' }}",
+            "lentes_no_confirmados": "={{ $json.epp_requeridos.includes('glasses') ? $json.trabajadores.filter(t => (t.epp_no_confirmados || []).includes('glasses')).length : '' }}",
+            "calzado_no_confirmado": "={{ $json.epp_requeridos.includes('shoes') ? $json.trabajadores.filter(t => (t.epp_no_confirmados || []).includes('shoes')).length : '' }}",
+            "estado_inspeccion": "={{ $json.estado_inspeccion }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "id_inspeccion",
+              "displayName": "id_inspeccion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fecha_inspeccion",
+              "displayName": "fecha_inspeccion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "zona_id",
+              "displayName": "zona_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "supervisor",
+              "displayName": "supervisor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "imagen",
+              "displayName": "imagen",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "trabajadores_detectados",
+              "displayName": "trabajadores_detectados",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "requieren_revision",
+              "displayName": "requieren_revision",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "epp_requeridos",
+              "displayName": "epp_requeridos",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "cascos_no_confirmados",
+              "displayName": "cascos_no_confirmados",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "chalecos_no_confirmados",
+              "displayName": "chalecos_no_confirmados",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "guantes_no_confirmados",
+              "displayName": "guantes_no_confirmados",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "lentes_no_confirmados",
+              "displayName": "lentes_no_confirmados",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "calzado_no_confirmado",
+              "displayName": "calzado_no_confirmado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "prioridad",
+              "displayName": "prioridad",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "diagnostico",
+              "displayName": "diagnostico",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "recomendacion",
+              "displayName": "recomendacion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "justificacion",
+              "displayName": "justificacion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "estado_revision",
+              "displayName": "estado_revision",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "estado_inspeccion",
+              "displayName": "estado_inspeccion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "reglas_validadas",
+              "displayName": "reglas_validadas",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "detalle_trabajadores",
+              "displayName": "detalle_trabajadores",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ok",
+              "displayName": "ok",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "result",
+              "displayName": "result",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1968,
+        -448
+      ],
+      "id": "948781ca-8d1c-4921-8659-c6edb65e2438",
+      "name": "Registrar inspección en Sheets",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "40gswSUaL1PaVyGY",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "91cc0bed-5efc-400a-a132-8092c9412411",
+              "name": "supervisor",
+              "value": "={{ $('Validar entrada EPP').first().json.supervisor }}",
+              "type": "string"
+            },
+            {
+              "id": "a21376b0-a421-4914-82a2-2f6ae5b0b446",
+              "name": "imagen_nombre",
+              "value": "={{ $('Validar entrada EPP').first().json.imagen_nombre }}",
+              "type": "string"
+            },
+            {
+              "id": "9c27ccc4-f583-46c3-8ee4-23da0bec9bf5",
+              "name": "fecha_envio",
+              "value": "={{ $('Validar entrada EPP').first().json.fecha_envio }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        416,
+        -192
+      ],
+      "id": "faf37fec-8734-4087-8a33-2913876e3d05",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "fcc4e64d-a4bf-4e3d-bd30-e1388b1ab515",
+              "name": "informe",
+              "value": "={{ JSON.parse($json.content.parts[0].text) }}",
+              "type": "object"
+            },
+            {
+              "id": "1a5fbc39-f503-4ead-9d90-e65dcc2d4517",
+              "name": "anterior",
+              "value": "={{ $('Preparar informe Gemini').first().json }}",
+              "type": "object"
+            },
+            {
+              "id": "baef7ee3-5ba1-429a-b73b-8f2eaca52953",
+              "name": "fecha_procesamiento",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1408,
+        -320
+      ],
+      "id": "0868064e-0dae-44dd-b7f2-b091fb820214",
+      "name": "Edit Fields1",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1,
+                2,
+                3,
+                4,
+                5
+              ],
+              "triggerAtHour": 9
+            },
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1,
+                2,
+                3,
+                4,
+                5
+              ],
+              "triggerAtHour": 13
+            },
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1,
+                2,
+                4,
+                5,
+                3
+              ],
+              "triggerAtHour": 17
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -128,
+        -288
+      ],
+      "id": "8d759798-acec-42e7-9d62-2b253578d7b3",
+      "name": "Recordatorio de inspección EPP"
+    },
+    {
+      "parameters": {
+        "sendTo": "ccornejod@udd.cl, hquinonesm@udd.cl, gsanchezy@udd.cl",
+        "subject": "Recordatorio de inspección programada de EPP",
+        "message": "=Estimado supervisor:  Corresponde realizar una inspección programada del uso de elementos de protección personal (EPP).  Por favor, ingrese al siguiente formulario, seleccione la zona de trabajo y adjunte una fotografía para su análisis.  Formulario de inspección: https://catalinacornejod.app.n8n.cloud/form/3677d634-7389-4759-8c49-c071a9eb33fd . Una vez enviada la imagen, el sistema analizará automáticamente los EPP detectados y generará un informe con los resultados y las posibles situaciones que requieren revisión humana. Sistema de Monitoreo Inteligente de EPP",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        32,
+        -288
+      ],
+      "id": "b06d8113-29ad-43c3-8d15-9c70f30d0b9e",
+      "name": "Enviar recordatorio inspección EPP",
+      "webhookId": "bd957f95-a6b7-43d6-b16a-25f67603bd47",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "N5rfvVN7mbnh77VK",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE",
+          "mode": "list",
+          "cachedResultName": "Historial de Inspecciones EPP - Certamen 2",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 7073333,
+          "mode": "list",
+          "cachedResultName": "Errores",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit#gid=7073333"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "fecha_error": "={{ $now.toISO() }}",
+            "id_ejecucion": "={{ $execution.id }}",
+            "etapa": "Detectar EPP con YOLO",
+            "zona_id": "={{ $('Validar entrada EPP').first().json.zona_id }}",
+            "supervisor": "={{ $('Validar entrada EPP').first().json.supervisor }}",
+            "mensaje_error": "={{ typeof $json.error === 'string'   ? $json.error   : ($json.error?.message || $json.message || JSON.stringify($json)) }}",
+            "estado": "pendiente_revision"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "fecha_error",
+              "displayName": "fecha_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "id_ejecucion",
+              "displayName": "id_ejecucion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "etapa",
+              "displayName": "etapa",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "zona_id",
+              "displayName": "zona_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "supervisor",
+              "displayName": "supervisor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "mensaje_error",
+              "displayName": "mensaje_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "estado",
+              "displayName": "estado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        432,
+        64
+      ],
+      "id": "6c7a8789-99e7-4451-a177-5aadd6da67a5",
+      "name": "Registrar errores",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "40gswSUaL1PaVyGY",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1,
+                2,
+                3,
+                4,
+                5
+              ],
+              "triggerAtHour": 18
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -128,
+        336
+      ],
+      "id": "4de71346-c51e-44a7-a327-866c02ced258",
+      "name": "Cierre diario EPP"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "\n# REPORTE DIARIO EPP + MODELOS HITO 2\n# Un reporte individual por supervisor.\n# Incluye cierre de hoy y planificacion de manana.\n\n# 1. Obtener registros del Merge\nregistros = [item.get(\"json\", {}) for item in _items]\n\n# Separar las tres fuentes de datos\ninspecciones = [\n    fila for fila in registros\n    if \"fecha_local_inspeccion\" in fila\n]\n\npronosticos = [\n    fila for fila in registros\n    if \"fecha_pronostico\" in fila\n]\n\nreportes_transformer = [\n    fila for fila in registros\n    if \"categoria_predicha\" in fila\n]\n\n# 2. Recuperar fecha actual\nhoy = next(\n    (\n        str(fila.get(\"fecha_actual\"))[:10]\n        for fila in registros\n        if fila.get(\"fecha_actual\")\n    ),\n    \"\"\n)\n\nif not hoy:\n    raise ValueError(\n        \"No se encontro fecha_actual en los datos del Merge.\"\n    )\n\n# 3. Calcular fecha de manana sin librerias\nano, mes, dia = [int(x) for x in hoy.split(\"-\")]\n\nbisiesto = (\n    ano % 4 == 0 and\n    (ano % 100 != 0 or ano % 400 == 0)\n)\n\ndias_mes = [\n    31, 29 if bisiesto else 28, 31, 30,\n    31, 30, 31, 31, 30, 31, 30, 31\n]\n\ndia += 1\n\nif dia > dias_mes[mes - 1]:\n    dia = 1\n    mes += 1\n\n    if mes > 12:\n        mes = 1\n        ano += 1\n\nmanana = f\"{ano:04d}-{mes:02d}-{dia:02d}\"\n\n# 4. Supervisores y correos\nsupervisores = {\n    \"Catalina Cornejo\": \"ccornejod@udd.cl\",\n    \"Hellen Quiñones\": \"hquinonesm@udd.cl\",\n    \"Gustavo Sánchez\": \"gsanchezy@udd.cl\"\n}\n\n# Convertir valores numericos\ndef numero(valor):\n    try:\n        return int(float(str(valor or 0).replace(\",\", \".\")))\n    except (ValueError, TypeError):\n        return 0\n\n# 5. Inspecciones reales de hoy\ninspecciones_hoy = [\n    fila for fila in inspecciones\n    if str(fila.get(\"fecha_local_inspeccion\", \"\"))[:10] == hoy\n    and fila.get(\"id_inspeccion\")\n]\n\n# 6. Pronosticos simulados para manana\npronosticos_manana = []\n\nfor fila in pronosticos:\n    fecha = str(fila.get(\"fecha_pronostico\", \"\"))[:10]\n\n    if fecha == manana:\n        pronosticos_manana.append({\n            \"zona_id\": str(fila.get(\"zona_id\", \"\")).strip(),\n            \"modelo\": fila.get(\"modelo\", \"\"),\n            \"trabajadores_revision_estimados\": fila.get(\n                \"trabajadores_revision_estimados\", \"\"\n            ),\n            \"fuente_datos\": fila.get(\n                \"fuente_datos\", \"SIMULADO\"\n            )\n        })\n\npronosticos_manana.sort(\n    key=lambda fila: (\n        fila[\"zona_id\"],\n        str(fila[\"modelo\"])\n    )\n)\n\n# 7. Resumen historico simulado de Transformer\n# Se agrupan las categorias predichas por zona.\n# NO representan incidentes reales de hoy.\n\ncategorias_por_zona = {}\n\nfor fila in reportes_transformer:\n\n    zona = str(fila.get(\"zona_id\", \"\")).strip()\n    categoria = str(\n        fila.get(\"categoria_predicha\", \"\")\n    ).strip()\n\n    if not zona or not categoria:\n        continue\n\n    if zona not in categorias_por_zona:\n        categorias_por_zona[zona] = {}\n\n    categorias_por_zona[zona][categoria] = (\n        categorias_por_zona[zona].get(categoria, 0) + 1\n    )\n\nresumen_transformer = []\n\nfor zona in sorted(categorias_por_zona):\n\n    categorias_ordenadas = sorted(\n        categorias_por_zona[zona].items(),\n        key=lambda par: par[1],\n        reverse=True\n    )\n\n    for categoria, cantidad in categorias_ordenadas:\n        resumen_transformer.append({\n            \"zona_id\": zona,\n            \"categoria\": categoria,\n            \"casos_en_muestra_simulada\": cantidad\n        })\n\n# 8. Generar un reporte por supervisor\nreportes = []\n\nfor supervisor, correo in supervisores.items():\n\n    # Seleccionar solo las inspecciones del supervisor\n    propias = [\n        fila for fila in inspecciones_hoy\n        if str(fila.get(\"supervisor\", \"\")).strip() == supervisor\n    ]\n\n    # Indicadores individuales\n    total = len(propias)\n\n    trabajadores = sum(\n        numero(fila.get(\"trabajadores_detectados\"))\n        for fila in propias\n    )\n\n    requieren_revision = sum(\n        numero(fila.get(\"requieren_revision\"))\n        for fila in propias\n    )\n\n    # Inspecciones que aun no tienen respuesta del supervisor\n    pendientes = sum(\n        1 for fila in propias\n        if str(fila.get(\"estado_revision\", \"\")).strip().lower()\n        == \"pendiente\"\n    )\n\n    # Inspecciones revisadas que requieren seguimiento\n    seguimiento = sum(\n        1 for fila in propias\n        if str(fila.get(\"estado_revision\", \"\")).strip().lower()\n        == \"requiere_seguimiento\"\n    )\n\n    prioridad_alta = sum(\n        1 for fila in propias\n        if str(fila.get(\"prioridad\", \"\")).strip().lower()\n        == \"alta\"\n    )\n\n    # Zonas inspeccionadas hoy\n    zonas = sorted(set(\n        str(fila.get(\"zona_id\") or fila.get(\"zona\")).strip()\n        for fila in propias\n        if fila.get(\"zona_id\") or fila.get(\"zona\")\n    ))\n\n    # Tasa de revision potencial\n    tasa_revision = (\n        round(requieren_revision / trabajadores * 100, 1)\n        if trabajadores > 0 else 0\n    )\n\n    # Recomendacion de cierre original\n    if total == 0:\n        recomendacion = (\n            \"No se registraron inspecciones a su nombre \"\n            \"durante la jornada. Revisar controles pendientes.\"\n        )\n\n    elif seguimiento > 0:\n        recomendacion = (\n            \"Dar seguimiento a las inspecciones que el supervisor \"\n            \"marco como pendientes de acciones adicionales.\"\n        )\n\n    elif requieren_revision > 0:\n        recomendacion = (\n            \"Priorizar la verificacion presencial de los casos \"\n            \"con EPP requerido no confirmado.\"\n        )\n\n    else:\n        recomendacion = (\n            \"Mantener las inspecciones programadas \"\n            \"y la revision humana de los resultados.\"\n        )\n\n    # 9. Preparar datos para Gemini\n    # Inspecciones: individuales.\n    # Pronosticos y Transformer: referencias generales por zona.\n\n    datos_gemini = {\n        \"supervisor\": supervisor,\n        \"fecha_cierre\": hoy,\n        \"fecha_planificacion\": manana,\n        \"resultados_reales_hoy\": {\n            \"inspecciones\": total,\n            \"trabajadores_detectados\": trabajadores,\n            \"trabajadores_revision_potencial\": requieren_revision,\n            \"inspecciones_pendientes\": pendientes,\n            \"casos_en_seguimiento\": seguimiento,\n            \"prioridad_alta\": prioridad_alta,\n            \"zonas_inspeccionadas\": zonas\n        },\n        \"pronosticos_manana\": pronosticos_manana,\n        \"transformer_muestra_historica_simulada\": resumen_transformer\n    }\n\n    # 10. Prompt para el segundo Gemini\n    prompt_gemini = (\n        \"Eres un asistente de gestion de seguridad industrial.\\n\"\n        \"Prepara recomendaciones breves para un supervisor.\\n\\n\"\n\n        \"REGLAS:\\n\"\n        \"- Distingue las inspecciones reales de los datos simulados.\\n\"\n        \"- El cierre considera solo las inspecciones de este supervisor.\\n\"\n        \"- Las inspecciones pendientes aun no han sido revisadas \"\n        \"por el supervisor.\\n\"\n        \"- Los casos en seguimiento ya recibieron una respuesta \"\n        \"humana, pero requieren atencion adicional.\\n\"\n        \"- No confundas pendientes de primera revision \"\n        \"con casos en seguimiento.\\n\"\n        \"- Si hay casos en seguimiento, considera su atencion \"\n        \"en la recomendacion de cierre.\\n\"\n        \"- Los pronosticos corresponden al dia siguiente.\\n\"\n        \"- LSTM y Holt-Winters son estimaciones de zonas diferentes; \"\n        \"no confundas sus resultados ni los presentes como hechos.\\n\"\n        \"- Los pronosticos son referencias generales por zona, \"\n        \"no resultados individuales del supervisor.\\n\"\n        \"- Transformer contiene una muestra historica simulada \"\n        \"de reportes clasificados.\\n\"\n        \"- Las clasificaciones Transformer NO representan \"\n        \"incidentes reales de hoy.\\n\"\n        \"- No atribuyas al supervisor incidentes de la muestra simulada.\\n\"\n        \"- Si no hubo inspecciones hoy, indicalo claramente.\\n\"\n        \"- Si faltan pronosticos, no inventes cantidades.\\n\"\n        \"- No confirmes incumplimientos a partir de YOLO.\\n\"\n        \"- La decision final corresponde al supervisor.\\n\"\n        \"- Propone acciones concretas y realistas.\\n\"\n        \"- Usa un lenguaje profesional, claro y breve.\\n\\n\"\n\n        \"Responde SOLO con un objeto JSON valido \"\n        \"que contenga estos tres campos:\\n\"\n        '\"recomendacion_cierre\": texto breve,\\n'\n        '\"recomendacion_manana\": texto breve,\\n'\n        '\"justificacion\": texto breve.\\n\\n'\n\n        \"DATOS PARA ANALIZAR:\\n\"\n        + str(datos_gemini)\n    )\n\n    # 11. Crear resultado individual\n    reportes.append({\n        \"json\": {\n            \"fecha\": hoy,\n            \"fecha_manana\": manana,\n            \"supervisor\": supervisor,\n            \"correo_destino\": correo,\n\n            \"inspecciones\": total,\n            \"trabajadores\": trabajadores,\n            \"requieren_revision\": requieren_revision,\n            \"tasa_revision_pct\": tasa_revision,\n\n            # Estados de revision separados\n            \"inspecciones_pendientes\": pendientes,\n            \"casos_en_seguimiento\": seguimiento,\n\n            \"prioridad_alta\": prioridad_alta,\n            \"zonas\": (\n                \", \".join(zonas)\n                if zonas else \"Sin inspecciones\"\n            ),\n\n            \"recomendacion\": recomendacion,\n\n            # Resultados de los modelos\n            \"pronosticos_manana\": pronosticos_manana,\n            \"transformer_referencia\": resumen_transformer,\n\n            # Entrada para Gemini\n            \"prompt_gemini_diario\": prompt_gemini\n        }\n    })\n\n# 12. Entregar tres reportes independientes\nreturn reportes\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        560
+      ],
+      "id": "b5223d5e-aac0-4dd9-a597-83bcd6cf7cef",
+      "name": "Calcular resumen diario EPP"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "06f70c6a-6e09-4814-9925-4592c2833523",
+              "name": "fecha_actual",
+              "value": "={{ $now.setZone('America/Santiago').toISODate() }}",
+              "type": "string"
+            },
+            {
+              "id": "224e8b72-1dba-4145-9445-f53e3828e304",
+              "name": "fecha_local_inspeccion",
+              "value": "={{ $json.fecha_inspeccion ? DateTime.fromISO($json.fecha_inspeccion).setZone('America/Santiago').toISODate() : '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        544,
+        336
+      ],
+      "id": "6245ea97-c761-4c5a-bfe3-71c051acdb9a",
+      "name": "Preparar fechas del reporte"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE",
+          "mode": "list",
+          "cachedResultName": "Historial de Inspecciones EPP - Certamen 2",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Inspecciones",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit#gid=0"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        320,
+        336
+      ],
+      "id": "d7bd64a6-5a67-4357-b894-209d24e6a770",
+      "name": "Leer historial diario EPP",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "40gswSUaL1PaVyGY",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.correo_destino }}",
+        "subject": "={{ \"Reporte diario EPP - \" + $json.supervisor + \" - \" + $json.fecha }}",
+        "message": "=\n{{\n`\n<div style=\"font-family:Arial,sans-serif;max-width:720px;margin:auto;color:#263238;line-height:1.6;background:white;\">\n\n  <div style=\"background:#19375d;color:white;padding:24px 28px;border-radius:9px 9px 0 0;\">\n    <h2 style=\"margin:0;font-size:23px;\">Informe diario de supervisión EPP</h2>\n    <p style=\"margin:9px 0 0;font-size:14px;\">\n      Cierre: ${$json.fecha} | Planificación: ${$json.fecha_manana}\n    </p>\n  </div>\n\n  <div style=\"padding:25px 28px;border:1px solid #e1e5ea;\">\n\n    <p>Estimado/a <strong>${$json.supervisor}</strong>:</p>\n\n    <p>\n      Se presenta el balance de sus inspecciones registradas durante\n      la jornada, junto con estimaciones y antecedentes de apoyo\n      para planificar las actividades de supervisión del día siguiente.\n    </p>\n\n    <h3 style=\"color:#19375d;margin-top:28px;\">\n      1. Resultados de la jornada\n    </h3>\n\n    <p style=\"font-size:14px;color:#555;\">\n      Indicadores correspondientes únicamente a las inspecciones\n      registradas a su nombre.\n    </p>\n\n    <table style=\"width:100%;border-collapse:collapse;font-size:14px;\">\n      ${[\n        [\"Inspecciones registradas\", $json.inspecciones],\n        [\"Trabajadores detectados\", $json.trabajadores],\n        [\"Trabajadores con EPP requerido no confirmado\", $json.requieren_revision],\n        [\"Inspecciones pendientes de revisión humana\", $json.inspecciones_pendientes],\n        [\"Casos en seguimiento\", $json.casos_en_seguimiento],\n        [\"Inspecciones de prioridad alta\", $json.prioridad_alta]\n      ].map(fila => `\n        <tr>\n          <td style=\"padding:10px 5px;border-bottom:1px solid #e4e4e4;\">\n            ${fila[0]}\n          </td>\n          <td style=\"padding:10px 5px;text-align:right;border-bottom:1px solid #e4e4e4;\">\n            <strong>${fila[1]}</strong>\n          </td>\n        </tr>\n      `).join(\"\")}\n    </table>\n\n    <p style=\"font-size:14px;\">\n      <strong>Zonas inspeccionadas:</strong> ${$json.zonas}\n    </p>\n\n    <p style=\"font-size:13px;color:#626262;\">\n      Un EPP no confirmado por el detector no implica necesariamente\n      que el trabajador no lo esté utilizando. Se requiere verificación presencial.\n    </p>\n\n    <h3 style=\"color:#19375d;margin-top:30px;\">\n      2. Planificación preventiva para mañana\n    </h3>\n\n    <p>\n      Los modelos de series temporales estiman cuántos trabajadores\n      <strong>podrían requerir verificación de EPP durante la próxima jornada</strong>.\n      Esta información permite anticipar la carga potencial de supervisión.\n    </p>\n\n    <table style=\"width:100%;border-collapse:collapse;text-align:left;font-size:14px;\">\n      <tr style=\"background:#eaf0f6;\">\n        <th style=\"padding:11px;\">Zona</th>\n        <th style=\"padding:11px;\">Modelo utilizado</th>\n        <th style=\"padding:11px;text-align:center;\">Trabajadores estimados</th>\n      </tr>\n\n      ${($json.pronosticos_manana || []).map(p => `\n        <tr>\n          <td style=\"padding:11px;border-bottom:1px solid #ddd;\">\n            ${String(p.zona_id).replace(\"zona_\", \"Zona \")}\n          </td>\n          <td style=\"padding:11px;border-bottom:1px solid #ddd;\">\n            ${p.modelo}\n          </td>\n          <td style=\"padding:11px;text-align:center;border-bottom:1px solid #ddd;\">\n            <strong>≈ ${Math.round(Number(p.trabajadores_revision_estimados))}</strong>\n          </td>\n        </tr>\n      `).join(\"\") || `\n        <tr>\n          <td colspan=\"3\" style=\"padding:12px;\">\n            No hay pronósticos disponibles para mañana.\n          </td>\n        </tr>\n      `}\n    </table>\n\n    <p style=\"background:#edf3f8;padding:13px;border-radius:6px;font-size:14px;margin-top:15px;\">\n      <strong>¿Cómo utilizar estas estimaciones?</strong><br>\n      Considerar la cantidad prevista de revisiones al organizar\n      las rondas, el tiempo disponible y los recursos de supervisión\n      para mañana.\n    </p>\n\n    <p style=\"font-size:12px;color:#666;\">\n      Pronósticos académicos calculados previamente sobre datos simulados.\n      No representan trabajadores efectivamente observados ni incumplimientos confirmados.\n      Cada modelo corresponde a una zona distinta y los valores no permiten\n      comparar directamente el nivel de riesgo entre zonas.\n    </p>\n\n    <h3 style=\"color:#19375d;margin-top:30px;\">\n      3. Análisis de reportes con Transformer\n    </h3>\n\n    <p>\n      El modelo Transformer clasifica descripciones de reportes de seguridad\n      en categorías. Los siguientes resultados corresponden a una\n      <strong>muestra histórica simulada</strong> utilizada para evaluar\n      su funcionamiento.\n    </p>\n\n    <table style=\"width:100%;border-collapse:collapse;font-size:14px;\">\n      <tr style=\"background:#eaf0f6;\">\n        <th style=\"padding:10px;text-align:left;\">Zona</th>\n        <th style=\"padding:10px;text-align:left;\">Sin evento reportado</th>\n        <th style=\"padding:10px;text-align:left;\">Otras categorías clasificadas</th>\n      </tr>\n\n      ${(() => {\n        const datos = $json.transformer_referencia || [];\n        const zonas = [...new Set(datos.map(r => r.zona_id))];\n\n        const nombres = {\n          transporte: \"Transporte\",\n          contacto_objetos: \"Contacto con objetos\",\n          caidas: \"Caídas\",\n          exposicion_sustancias: \"Exposición a sustancias\"\n        };\n\n        return zonas.length ? zonas.map(zona => {\n          const filas = datos.filter(r => r.zona_id === zona);\n\n          const total = filas.reduce(\n            (s, r) => s + Number(r.casos_en_muestra_simulada || 0), 0\n          );\n\n          const sinEvento = filas\n            .filter(r => r.categoria === \"sin_evento_reportado\")\n            .reduce(\n              (s, r) => s + Number(r.casos_en_muestra_simulada || 0), 0\n            );\n\n          const otras = filas\n            .filter(r => r.categoria !== \"sin_evento_reportado\")\n            .map(r =>\n              (nombres[r.categoria] || String(r.categoria).replace(/_/g, \" \"))\n              + \" (\" + r.casos_en_muestra_simulada + \")\"\n            )\n            .join(\", \");\n\n          return `\n            <tr>\n              <td style=\"padding:11px;border-bottom:1px solid #ddd;\">\n                <strong>${String(zona).replace(\"zona_\", \"Zona \")}</strong>\n              </td>\n              <td style=\"padding:11px;border-bottom:1px solid #ddd;\">\n                ${sinEvento} de ${total}\n                (${total ? Math.round(sinEvento / total * 100) : 0}%)\n              </td>\n              <td style=\"padding:11px;border-bottom:1px solid #ddd;\">\n                ${otras || \"Sin otras categorías\"}\n              </td>\n            </tr>\n          `;\n        }).join(\"\") : `\n          <tr>\n            <td colspan=\"3\" style=\"padding:12px;\">\n              Sin resultados Transformer disponibles.\n            </td>\n          </tr>\n        `;\n      })()}\n    </table>\n\n    <p style=\"background:#edf3f8;padding:13px;border-radius:6px;font-size:14px;margin-top:15px;\">\n      <strong>Interpretación:</strong><br>\n      El modelo permite organizar reportes según el tipo de situación descrita.\n      En esta muestra predominan los registros clasificados como\n      \"sin evento reportado\". Las demás categorías permiten ilustrar\n      posibles focos de seguimiento preventivo.\n    </p>\n\n    <p style=\"font-size:12px;color:#666;\">\n      Estas cantidades corresponden a clasificaciones del conjunto\n      de prueba, no a incidentes reales ni a tasas de accidentabilidad.\n      No permiten concluir cuáles son los riesgos más frecuentes\n      en la operación actual.\n    </p>\n\n    <h3 style=\"color:#19375d;margin-top:30px;\">\n      4. Recomendaciones para la gestión\n    </h3>\n\n    <div style=\"border-left:4px solid #19375d;padding:4px 15px;margin:16px 0;\">\n      <p style=\"margin:5px 0;font-weight:bold;\">\n        Acciones de cierre de jornada\n      </p>\n      <p style=\"margin:5px 0;\">\n        ${Number($json.inspecciones) === 0\n          ? \"No se registraron inspecciones a su nombre durante esta jornada. Revisar si existen verificaciones de días anteriores pendientes antes de cerrar el seguimiento.\"\n          : $json.recomendacion_cierre}\n      </p>\n    </div>\n\n    <div style=\"border-left:4px solid #7699b8;padding:4px 15px;margin:16px 0;\">\n      <p style=\"margin:5px 0;font-weight:bold;\">\n        Acciones sugeridas para mañana\n      </p>\n      <p style=\"margin:5px 0;\">\n        ${$json.recomendacion_manana}\n      </p>\n    </div>\n\n    <p style=\"font-size:13px;color:#555;\">\n      Las recomendaciones fueron generadas con Gemini a partir del resumen\n      de inspecciones, pronósticos y clasificaciones disponibles.\n      Deben ser revisadas por el supervisor antes de aplicarse.\n    </p>\n\n    <!-- ACCESO AL TABLERO INTERACTIVO -->\n    <div style=\"background:#edf5fa;border:1px solid #d6e5f0;\n                border-radius:10px;padding:24px;\n                text-align:center;margin:28px 0;\">\n\n      <h3 style=\"color:#19375d;font-size:18px;margin:0 0 12px;\">\n        Centro de control de EPP\n      </h3>\n\n      <p style=\"font-size:14px;color:#475569;line-height:1.7;\n                margin:0 0 22px;\">\n        Acceda al tablero interactivo para consultar\n        los indicadores de inspección, el seguimiento por supervisor,\n        los pronósticos de LSTM y Holt-Winters,\n        las clasificaciones Transformer y el historial\n        de recomendaciones de Gemini.\n      </p>\n\n      <a href=\"https://sistema-de-monitoreo-inteligente-de-epp-cdqurejjtr53gqpfj49m8v.streamlit.app/\"\n         target=\"_blank\"\n         style=\"display:inline-block;background:#17628b;\n                color:#ffffff;text-decoration:none;\n                padding:15px 26px;border-radius:7px;\n                font-size:14px;font-weight:bold;\">\n        📊 Ver tablero interactivo EPP\n      </a>\n\n      <p style=\"font-size:12px;color:#64748b;\n                margin:20px 0 0;line-height:1.6;\">\n        Las inspecciones se consultan desde Google Sheets.\n        Los pronósticos y clasificaciones corresponden a\n        resultados académicos previamente calculados.\n      </p>\n\n    </div>\n\n    <div style=\"background:#f1f3f5;padding:15px;border-radius:6px;margin-top:25px;font-size:12px;color:#555;\">\n      <strong>Alcance y limitaciones del sistema</strong><br>\n      El análisis automático de imágenes no acredita el cumplimiento normativo.\n      Los procedimientos RAG, los pronósticos y los reportes Transformer\n      utilizan información académica simulada.\n      Los modelos apoyan la supervisión, pero no reemplazan la\n      evaluación humana ni las decisiones de seguridad.\n    </div>\n\n    <p style=\"margin-top:24px;font-size:13px;color:#555;\">\n      Sistema académico de monitoreo preventivo de EPP.\n    </p>\n\n  </div>\n</div>\n`\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2048,
+        576
+      ],
+      "id": "97a9f8ee-2002-45f8-81c9-8d723ae3124d",
+      "name": "Enviar reporte diario",
+      "webhookId": "29680271-32b3-4657-a5f4-98ecdfb0c84e",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "N5rfvVN7mbnh77VK",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1qajnt6eO9Gbw46RGxqWL9RfUyOSQgd7kMiGs3fjNAQI",
+          "mode": "list",
+          "cachedResultName": "Modelos predictivos EPP- Hito 2",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1qajnt6eO9Gbw46RGxqWL9RfUyOSQgd7kMiGs3fjNAQI/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 90701287,
+          "mode": "list",
+          "cachedResultName": "pronosticos_epp_hito2",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1qajnt6eO9Gbw46RGxqWL9RfUyOSQgd7kMiGs3fjNAQI/edit#gid=90701287"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        320,
+        544
+      ],
+      "id": "4f15a711-8fab-4097-81f4-1b6cabaef4f5",
+      "name": "Leer pronosticos EPP",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "40gswSUaL1PaVyGY",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1qajnt6eO9Gbw46RGxqWL9RfUyOSQgd7kMiGs3fjNAQI",
+          "mode": "list",
+          "cachedResultName": "Modelos predictivos EPP- Hito 2",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1qajnt6eO9Gbw46RGxqWL9RfUyOSQgd7kMiGs3fjNAQI/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 268899787,
+          "mode": "list",
+          "cachedResultName": "clasificaciones_transformer_epp",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1qajnt6eO9Gbw46RGxqWL9RfUyOSQgd7kMiGs3fjNAQI/edit#gid=268899787"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        320,
+        752
+      ],
+      "id": "97b0ca5a-fd6f-448b-b172-1b9f33b040e7",
+      "name": "Leer reportes Transformer",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "40gswSUaL1PaVyGY",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        608,
+        672
+      ],
+      "id": "9b06ac64-79f0-439c-9736-4baf7c83fa0a",
+      "name": "Unir modelos hito 2"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        864,
+        624
+      ],
+      "id": "ff96379b-29a7-427b-bba9-386e629e73fd",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://rag-epp-hito2.onrender.com/buscar",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "=\n{{ JSON.stringify({\n  inspeccion_id: $json.entrada_llm.inspeccion_id,\n  zona_id: $json.entrada_llm.zona_id,\n  pregunta: $json.entrada_llm.trabajadores_detectados === 0\n    ? \"No hay personas evaluables en la imagen. Recupera el procedimiento SIM-PROC-04 para revisar la fotografía.\"\n    : $json.entrada_llm.trabajadores_revision_potencial > 0\n      ? \"Hay EPP requeridos no confirmados. ¿Qué procedimiento de verificación presencial corresponde?\"\n      : \"Hay trabajadores evaluables y no se generaron alertas de EPP. ¿Qué procedimiento de revisión rutinaria corresponde?\",\n  k: 3\n}) }}\n",
+        "options": {
+          "timeout": 12000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        800,
+        -48
+      ],
+      "id": "c9d22ae9-547f-4f55-8781-23d42e767b2c",
+      "name": "HTTP Request",
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "fyjJzz8wMApI8kG6",
+          "name": "Header Auth account 2"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        944,
+        -208
+      ],
+      "id": "36d396b6-23dc-4e09-991c-723543c0ed7a",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-3.1-flash-lite",
+          "mode": "list",
+          "cachedResultName": "Gemini 3.1 Flash-Lite"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "=\n{{ $json.prompt_gemini_diario }}\n"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        1328,
+        784
+      ],
+      "id": "971d619c-461e-4f5a-9377-c5cae4c935f6",
+      "name": "Gemini recomendaciones diarias",
+      "credentials": {
+        "googlePalmApi": {
+          "id": null,
+          "name": "",
+          "__aiGatewayManaged": true
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1600,
+        576
+      ],
+      "id": "dc881824-ad15-40e0-b3cd-877adcbba88a",
+      "name": "Merge2"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "7ba7b0b0-7c6e-4dec-ae35-ab7363aee2dd",
+              "name": "recomendacion_cierre",
+              "value": "={{ JSON.parse($json.content.parts[0].text).recomendacion_cierre }}",
+              "type": "string"
+            },
+            {
+              "id": "ef8ff797-caca-42df-92e4-4f149d3d8a8d",
+              "name": "recomendacion_manana",
+              "value": "={{ JSON.parse($json.content.parts[0].text).recomendacion_manana }}",
+              "type": "string"
+            },
+            {
+              "id": "bf42ffc6-58bf-4ff9-92c7-2a8bcfe4cb11",
+              "name": "justificacion_gemini",
+              "value": "={{ JSON.parse($json.content.parts[0].text).justificacion }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1824,
+        576
+      ],
+      "id": "33541991-5ee3-4cec-857c-ab7bceb61464",
+      "name": "Preparar reporte diario final"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE",
+          "mode": "list",
+          "cachedResultName": "Historial de Inspecciones EPP - Certamen 2",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 7073333,
+          "mode": "list",
+          "cachedResultName": "Errores",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit#gid=7073333"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "fecha_error": "={{ $now.toISO() }}",
+            "id_ejecucion": "={{ $execution.id }}",
+            "etapa": "Consultar procedimientos RAG",
+            "zona_id": "={{ $('Validar entrada EPP').first().json.zona_id }}",
+            "supervisor": "={{ $('Validar entrada EPP').first().json.supervisor }}",
+            "mensaje_error": "={{ typeof $json.error === 'string'   ? $json.error   : ($json.error?.message || $json.message || JSON.stringify($json)) }}",
+            "estado": "pendiente_revision"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "fecha_error",
+              "displayName": "fecha_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "id_ejecucion",
+              "displayName": "id_ejecucion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "etapa",
+              "displayName": "etapa",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "zona_id",
+              "displayName": "zona_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "supervisor",
+              "displayName": "supervisor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "mensaje_error",
+              "displayName": "mensaje_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "estado",
+              "displayName": "estado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1008,
+        112
+      ],
+      "id": "ff744f5d-f8aa-4b38-8621-f090b0a61d2a",
+      "name": "Registrar errores1",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "40gswSUaL1PaVyGY",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE",
+          "mode": "list",
+          "cachedResultName": "Historial de Inspecciones EPP - Certamen 2",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 7073333,
+          "mode": "list",
+          "cachedResultName": "Errores",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit#gid=7073333"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "fecha_error": "={{ $now.toISO() }}",
+            "id_ejecucion": "={{ $execution.id }}",
+            "etapa": "Generar informe Gemini",
+            "zona_id": "={{ $('Validar entrada EPP').first().json.zona_id }}",
+            "supervisor": "={{ $('Validar entrada EPP').first().json.supervisor }}",
+            "mensaje_error": "={{ typeof $json.error === 'string'   ? $json.error   : ($json.error?.message || $json.message || JSON.stringify($json)) }}",
+            "estado": "pendiente_revision"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "fecha_error",
+              "displayName": "fecha_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "id_ejecucion",
+              "displayName": "id_ejecucion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "etapa",
+              "displayName": "etapa",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "zona_id",
+              "displayName": "zona_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "supervisor",
+              "displayName": "supervisor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "mensaje_error",
+              "displayName": "mensaje_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "estado",
+              "displayName": "estado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1392,
+        0
+      ],
+      "id": "a057c36e-1629-41b5-bf13-d62feeebbbda",
+      "name": "Registrar errores2",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "40gswSUaL1PaVyGY",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE",
+          "mode": "list",
+          "cachedResultName": "Historial de Inspecciones EPP - Certamen 2",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 7073333,
+          "mode": "list",
+          "cachedResultName": "Errores",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit#gid=7073333"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "fecha_error": "={{ $now.toISO() }}",
+            "id_ejecucion": "={{ $execution.id }}",
+            "etapa": "Validar informe final EPP",
+            "zona_id": "={{ $('Validar entrada EPP').first().json.zona_id }}",
+            "supervisor": "={{ $('Validar entrada EPP').first().json.supervisor }}",
+            "mensaje_error": "={{ typeof $json.error === 'string'   ? $json.error   : ($json.error?.message || $json.message || JSON.stringify($json)) }}",
+            "estado": "pendiente_revision"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "fecha_error",
+              "displayName": "fecha_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "id_ejecucion",
+              "displayName": "id_ejecucion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "etapa",
+              "displayName": "etapa",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "zona_id",
+              "displayName": "zona_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "supervisor",
+              "displayName": "supervisor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "mensaje_error",
+              "displayName": "mensaje_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "estado",
+              "displayName": "estado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1984,
+        96
+      ],
+      "id": "c4bdb6f1-4577-4552-8a71-45aeab0dfca5",
+      "name": "Registrar errores3",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "40gswSUaL1PaVyGY",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE",
+          "mode": "list",
+          "cachedResultName": "Historial de Inspecciones EPP - Certamen 2",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 7073333,
+          "mode": "list",
+          "cachedResultName": "Errores",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit#gid=7073333"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "fecha_error": "={{ $now.toISO() }}",
+            "id_ejecucion": "={{ $execution.id }}",
+            "etapa": "Procesar JSON de Gemini",
+            "zona_id": "={{ $('Validar entrada EPP').first().json.zona_id }}",
+            "supervisor": "={{ $('Validar entrada EPP').first().json.supervisor }}",
+            "mensaje_error": "={{ typeof $json.error === 'string'   ? $json.error   : ($json.error?.message || $json.message || JSON.stringify($json)) }}",
+            "estado": "pendiente_revision"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "fecha_error",
+              "displayName": "fecha_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "id_ejecucion",
+              "displayName": "id_ejecucion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "etapa",
+              "displayName": "etapa",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "zona_id",
+              "displayName": "zona_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "supervisor",
+              "displayName": "supervisor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "mensaje_error",
+              "displayName": "mensaje_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "estado",
+              "displayName": "estado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1600,
+        -192
+      ],
+      "id": "6d5e133c-57fa-4021-8589-da372d695e78",
+      "name": "Registrar errores4",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "40gswSUaL1PaVyGY",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE",
+          "mode": "list",
+          "cachedResultName": "Historial de Inspecciones EPP - Certamen 2",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 7073333,
+          "mode": "list",
+          "cachedResultName": "Errores",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit#gid=7073333"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "fecha_error": "={{ $now.toISO() }}",
+            "id_ejecucion": "={{ $execution.id }}",
+            "etapa": "Guardar inspección en Sheets",
+            "zona_id": "={{ $('Validar entrada EPP').first().json.zona_id }}",
+            "supervisor": "={{ $('Validar entrada EPP').first().json.supervisor }}",
+            "mensaje_error": "={{ typeof $json.error === 'string'   ? $json.error   : ($json.error?.message || $json.message || JSON.stringify($json)) }}",
+            "estado": "pendiente_revision"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "fecha_error",
+              "displayName": "fecha_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "id_ejecucion",
+              "displayName": "id_ejecucion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "etapa",
+              "displayName": "etapa",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "zona_id",
+              "displayName": "zona_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "supervisor",
+              "displayName": "supervisor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "mensaje_error",
+              "displayName": "mensaje_error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "estado",
+              "displayName": "estado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2224,
+        -464
+      ],
+      "id": "c09c2397-e152-42ac-afb7-472b12a8a3e4",
+      "name": "Registrar errores5",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "40gswSUaL1PaVyGY",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE",
+          "mode": "list",
+          "cachedResultName": "Historial de Inspecciones EPP - Certamen 2",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Inspecciones",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1Zalq02fgcOmTpXPYzrO_L_FosKBIbRomh0KZmy0m8jE/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "id_inspeccion": "={{ $('Validar informe final EPP').first().json.inspeccion_id }}",
+            "estado_revision": "={{ $json.data?.approved === true ? 'revisado' : $json.data?.approved === false ? 'requiere_seguimiento' : 'pendiente' }}"
+          },
+          "matchingColumns": [
+            "id_inspeccion"
+          ],
+          "schema": [
+            {
+              "id": "id_inspeccion",
+              "displayName": "id_inspeccion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fecha_inspeccion",
+              "displayName": "fecha_inspeccion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "zona_id",
+              "displayName": "zona_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "supervisor",
+              "displayName": "supervisor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "imagen",
+              "displayName": "imagen",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "trabajadores_detectados",
+              "displayName": "trabajadores_detectados",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "requieren_revision",
+              "displayName": "requieren_revision",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "epp_requeridos",
+              "displayName": "epp_requeridos",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "cascos_no_confirmados",
+              "displayName": "cascos_no_confirmados",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "chalecos_no_confirmados",
+              "displayName": "chalecos_no_confirmados",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "guantes_no_confirmados",
+              "displayName": "guantes_no_confirmados",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "lentes_no_confirmados",
+              "displayName": "lentes_no_confirmados",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "calzado_no_confirmado",
+              "displayName": "calzado_no_confirmado",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "prioridad",
+              "displayName": "prioridad",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "diagnostico",
+              "displayName": "diagnostico",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "recomendacion",
+              "displayName": "recomendacion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "justificacion",
+              "displayName": "justificacion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "estado_revision",
+              "displayName": "estado_revision",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "estado_inspeccion",
+              "displayName": "estado_inspeccion",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reglas_validadas",
+              "displayName": "reglas_validadas",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "detalle_trabajadores",
+              "displayName": "detalle_trabajadores",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ok",
+              "displayName": "ok",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "result",
+              "displayName": "result",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2544,
+        -336
+      ],
+      "id": "4f8171f6-b8df-4f60-86e0-558d43221833",
+      "name": "Actualizar revisión humana",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "40gswSUaL1PaVyGY",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Formulario": {
+      "main": [
+        [
+          {
+            "node": "Validar entrada EPP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar entrada EPP": {
+      "main": [
+        [
+          {
+            "node": "Detectar EPP con YOLO (HTTP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Detectar EPP con YOLO (HTTP)": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar errores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generar informe EPP con Gemini": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar errores2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar informe Gemini": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar informe final EPP": {
+      "main": [
+        [
+          {
+            "node": "Enviar alerta EPP Gmail",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Enviar alerta EPP Telegram",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Registrar inspección en Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar errores3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Preparar informe Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields1": {
+      "main": [
+        [
+          {
+            "node": "Validar informe final EPP",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar errores4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recordatorio de inspección EPP": {
+      "main": [
+        [
+          {
+            "node": "Enviar recordatorio inspección EPP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cierre diario EPP": {
+      "main": [
+        [
+          {
+            "node": "Leer pronosticos EPP",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Leer historial diario EPP",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Leer reportes Transformer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar fechas del reporte": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer historial diario EPP": {
+      "main": [
+        [
+          {
+            "node": "Preparar fechas del reporte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calcular resumen diario EPP": {
+      "main": [
+        [
+          {
+            "node": "Gemini recomendaciones diarias",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer pronosticos EPP": {
+      "main": [
+        [
+          {
+            "node": "Unir modelos hito 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer reportes Transformer": {
+      "main": [
+        [
+          {
+            "node": "Unir modelos hito 2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Unir modelos hito 2": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Registrar errores1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Generar informe EPP con Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Calcular resumen diario EPP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini recomendaciones diarias": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge2": {
+      "main": [
+        [
+          {
+            "node": "Preparar reporte diario final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar reporte diario final": {
+      "main": [
+        [
+          {
+            "node": "Enviar reporte diario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar inspección en Sheets": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Registrar errores5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar alerta EPP Gmail": {
+      "main": [
+        [
+          {
+            "node": "Actualizar revisión humana",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "4b398375-8437-4456-a3bc-f7669ab38700",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "bb8f48b1458ac7744619f08f6ebca070ef52bbd29c74038e73c2746cbd7ac12e"
+  },
+  "nodeGroups": [],
+  "id": "37aOSanlHj6h37Y2",
+  "tags": []
+}

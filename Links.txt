@@ -1,0 +1,3 @@
+Streamlit: https://sistema-de-monitoreo-inteligente-de-epp-cdqurejjtr53gqpfj49m8v.streamlit.app/
+
+GITHUB: https://github.com/hellenelizabethqm-netizen/HITO2_EXAMEN_IA
